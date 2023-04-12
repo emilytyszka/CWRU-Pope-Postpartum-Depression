@@ -1,0 +1,845 @@
+---
+title: "PPD Paper - Analyses 5"
+output:
+    rmdformats::readthedown:
+    highlight: kate
+    number_sections: true
+    code_folding: show
+    df_print: paged
+---
+
+
+# Initial Setup and Package Loads in R
+
+```{r package loads, message = FALSE, comment = NA}
+
+library(Epi); library(janitor); library(here); library(readxl); library(magrittr); library(data.table)
+library(writexl); library(MASS); library(skimr); library(naniar); library(rms); library(broom); 
+library(DescTools); library(pscl);library(psych); #library(caret); library(GGally); library(plyr);
+library(haven); library(knitr); library(lubridate); library(table1); library(tableone); library(tidyverse) 
+
+```
+
+# Data Preparation
+
+## Load Data
+
+```{r load_data, warning = FALSE}
+
+rawsurveys <- read_dta(file = "PPD-data-raw-9-8.dta")
+
+```
+
+As you can see, the top 2 rows are metadata and aren't supposed to be
+there. I'm going to create a new dataset called `cleansurveys` without
+these. We will use that dataset from here on out to do the analyses.
+
+```{r remove top rows, warning = FALSE}
+
+cleansurveys <- rawsurveys[-1, ]
+cleansurveys <- cleansurveys[-1, ]
+
+```
+
+
+## Prepare Variables of Interest
+
+### Age
+
+```{r rename age, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("age"="Age")
+cleansurveys$age <- as.numeric(cleansurveys$age)
+summary(cleansurveys$age)
+
+```
+
+Our respondents are between the ages of 18 and 92, with a mean age of
+35. Only 14 people left age blank.
+
+### Race
+
+```{r rename race, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("race"="Race")
+cleansurveys$race <- as.factor(cleansurveys$race)
+summary(cleansurveys$race)
+
+```
+
+We have a wide array of racial identities - many people checked multiple
+boxes. It isn't possible to look at every possible combination, due to
+sample size, so we're going to have to collapse down our categories to
+"Black, White, Other"
+
+```{r collapse race, warning = FALSE}
+
+cleansurveys$racecollapsed <- fct_collapse(cleansurveys$race,
+    NULL =c(NULL,'NOS'),
+    'Black' = c('African','Black or African American,African, White','Black or African American'),
+    'White' = 'White', 
+    'Other' = c('American Indian or Alaskan native,African,White',
+                'American Indian or Alaskan native,Black or African American,White',
+                'American Indian or Alaskan native,White,Middle Eastern',
+                'Asian,Black or African American','Asian,White','Middle Eastern',
+                'White,Middle Eastern','American Indian or Alaskan native',
+                'American Indian or Alaskan native,Black or African American',
+                'American Indian or Alaskan native,White','Asian',
+                'Asian,Native Hawaiian or Pacific Islander','Native Hawaiian or Pacific Islander'))
+cleansurveys$racecollapsed <- factor(cleansurveys$racecollapsed,
+                levels = c("White", "Black", "Other"))
+summary(cleansurveys$racecollapsed)
+
+
+```
+
+### Hispanic/Latino
+
+```{r rename hispanic, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("Hispanic"="Ethnincity")
+cleansurveys$Hispanic <- as.factor(cleansurveys$Hispanic)
+
+cleansurveys$Hispanic <- factor(cleansurveys$Hispanic,
+                levels = c("Hispanic or Latino", "Not Hispanic or Latino"))
+cleansurveys$Hispanic<-relevel(cleansurveys$Hispanic, "Not Hispanic or Latino")
+cleansurveys$Hispanic <- relevel(factor(cleansurveys$Hispanic), ref = "Not Hispanic or Latino")
+summary(cleansurveys$Hispanic)
+
+```
+
+### Marital Status
+
+
+```{r rename marital, warning = FALSE}
+
+cleansurveys$MaritalStatus <- as.factor(cleansurveys$MaritalStatus)
+
+cleansurveys$MaritalStatus <- fct_collapse(cleansurveys$MaritalStatus,
+    NULL = '',
+    'Not in a relationship' = 'Not in a relationship',
+    'Not married, but in a relationship' = 'Not married, but in a relationshi',
+    'Married/Cohabitating' = c('Married','Living with a partner'),
+    'Divorced/Separated/Widowed' = c('Divorced','Separated','Widowed'))
+
+cleansurveys$MaritalStatus <- factor(cleansurveys$MaritalStatus,
+                levels = c("Not in a relationship", "Married/Cohabitating", 'Not married, but in a relationship', 'Divorced/Separated/Widowed'))
+
+summary(cleansurveys$MaritalStatus)
+
+```
+
+### Education
+
+
+```{r rename education, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("Education"="TerminalDegree")
+cleansurveys$Education <- as.factor(cleansurveys$Education)
+cleansurveys$Education <- fct_collapse(cleansurveys$Education,
+    NULL = '',
+    'High School' = 'Completed High School', 
+    'Grade School' = 'Grade School',
+    'Some College/Associate' = c('Some college', 'Associate Degree'),
+    'College' = "College/Bachelor's degree",
+    'Post-Graduate' = 'Post-graduate degree')
+summary(cleansurveys$Education)
+```
+
+
+### Method of Delivery - FIX
+
+The way Qualtrics coded this is (to put it bluntly) kind of a nightmare - the respondents had the option to enter their births in any order and list multiple birth methods. I had to go into Excel to work this out manually: I've created a variable in Excel that gives the entry for the respondent's most recent delivery. We will make a new categorical variable called `MostRecentDelivery`
+
+```{r fix most recent birth, warning = FALSE}
+write_xlsx(cleansurveys, "fixmostrecentbirth.xlsx") #turn into an excel so I can mess with it and make a "most recent birth" variable
+cleansurveys <- read_excel("fixmostrecentbirthnew.xlsx") #after fixing, bring in new excel sheet
+
+```
+
+```{r most recent delivery , warning = FALSE}
+
+cleansurveys$MostRecentDelivery <- as.factor(cleansurveys$MostRecentDelivery)
+summary(cleansurveys$MostRecentDelivery)
+
+```
+
+Next we collapse it down. The responses are as follows:
+
+```{r collapse most recent delivery , warning = FALSE}
+
+cleansurveys$MostRecentDelivery <- fct_collapse(cleansurveys$MostRecentDelivery,
+    NULL = c(NULL, 0, '#N/A', ''),
+    'Vaginal' = 'Vaginal delivery',
+    'Assisted Vaginal' = c('Forceps assisted vaginal delivery', 'Vaginal delivery,Forceps assisted vaginal delivery', 
+                           'Vaginal delivery,Vacuum assisted vaginal delivery,Forceps assisted vaginal delivery', 
+                           'Vacuum assisted vaginal delivery', 'Vaginal delivery,Vacuum assisted vaginal delivery'),
+    'Cesarean' = c('Cesarean delivery', 'Vaginal delivery,Cesarean delivery', 'Forceps assisted vaginal delivery,Cesarean delivery'))
+summary(cleansurveys$MostRecentDelivery)
+
+```
+### Gravidity and Number of Kids
+
+We have a value for number of pregnancies, but stillbirths and abortions are placed in one number, so I'm not sure if we can really measure parity.
+
+```{r g and p , warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("Gravidity"="NumberofPregnancies")
+cleansurveys$Gravidity <- as.numeric(cleansurveys$Gravidity)
+summary(cleansurveys$Gravidity)
+
+cleansurveys <- cleansurveys %>% rename("NKids" = "numberofkids")
+cleansurveys$NKids <- as.numeric(cleansurveys$NKids)
+summary(cleansurveys$NKids)
+
+```
+
+### Years Since Most Recent Delivery
+
+```{r years since most recent delivery , warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("Year"="MaxDate")
+cleansurveys$Year <- as.factor(cleansurveys$Year)
+summary(cleansurveys$Year)
+
+cleansurveys$Year <- fct_collapse(cleansurveys$Year,
+    NULL = c(NULL, 0, '#N/A', '','2022','2027', '2029'),
+    '2003' = c('2003', '20003'))
+summary(cleansurveys$Year)
+
+cleansurveys$Year2 <- as.numeric(as.character(cleansurveys$Year))
+summary(cleansurveys$Year2)
+
+
+cleansurveys$YearsSince <-(cleansurveys$Year2-2021)
+summary(cleansurveys$YearsSince)
+
+```
+These responses in the 1970s and 1980s are an issue.
+
+### Complications (Most Recent Delivery)
+
+I played around with this, but it wasn't possible to collapse these down
+in any way that both made sense and had a good sample size, so we're
+making a binary variable.
+
+```{r rename complications, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("Complications"="complicationsduringmostrecent")
+cleansurveys$Complications2 <- as.factor(cleansurveys$Complications)
+
+cleansurveys$Complications2 <- fct_collapse(cleansurveys$Complications2,
+    NULL = NULL,
+    'Yes' = c('Bleeding requiring a blood transfusion',
+              'Bleeding requiring a blood transfusion,Infection (chorioamnionitis, endometritis, etc.)',
+              'Bleeding requiring a blood transfusion,Infection (chorioamnionitis, endometritis, etc.),Readmission to the hospital',
+              'Bleeding requiring a blood transfusion,Infection (chorioamnionitis, endometritis, etc.),Readmission to the hospital,Other:',
+              'Bleeding requiring a blood transfusion,Readmission to the hospital',
+              'Bleeding requiring a blood transfusion,Readmission to the hospital,Other:',
+              'Infection (chorioamnionitis, endometritis, etc.)',
+              'Infection (chorioamnionitis, endometritis, etc.),Readmission to the hospital','Other:','Readmission to the hospital',
+              'Readmission to the hospital,Other:'),
+    'No' = 'N1')
+cleansurveys$Complications2 <- factor(cleansurveys$Complications2,
+                levels = c("No", "Yes"))
+cleansurveys$ComplicationsClean <- cleansurveys$Complications2
+summary(cleansurveys$ComplicationsClean)
+
+```
+
+#### Bleeding Variable
+
+
+We're also going to add a bleeding variable as a more specific version of `complicationsclean` - anyone who marked "1" vs anyone who marked "5" with everyone else as NAs.
+
+```{r rename bleeding, warning = FALSE}
+
+cleansurveys$Bleeding <- as.factor(cleansurveys$Complications)
+
+cleansurveys$Bleeding <- fct_collapse(cleansurveys$Bleeding,
+    NULL = c(NULL, 'Infection (chorioamnionitis, endometritis, etc.)',
+              'Infection (chorioamnionitis, endometritis, etc.),Readmission to the hospital','Other:','Readmission to the hospital',
+              'Readmission to the hospital,Other:'),
+    'Bleeding' = c('Bleeding requiring a blood transfusion',
+              'Bleeding requiring a blood transfusion,Infection (chorioamnionitis, endometritis, etc.)',
+              'Bleeding requiring a blood transfusion,Infection (chorioamnionitis, endometritis, etc.),Readmission to the hospital',
+              'Bleeding requiring a blood transfusion,Infection (chorioamnionitis, endometritis, etc.),Readmission to the hospital,Other:',
+              'Bleeding requiring a blood transfusion,Readmission to the hospital',
+              'Bleeding requiring a blood transfusion,Readmission to the hospital,Other:'),
+    'No Complications' = 'N1')
+cleansurveys$Bleeding <- factor(cleansurveys$Bleeding,
+                levels = c("No Complications", "Bleeding"))
+summary(cleansurveys$Bleeding)
+
+```
+
+
+### Breastfeeding
+
+
+```{r rename breastfeeding, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("Breastfeeding"="Didyoubreastfeedafteryourmo")
+cleansurveys$Breastfeeding <- as.factor(cleansurveys$Breastfeeding)
+
+cleansurveys$Breastfeeding <- fct_collapse(cleansurveys$Breastfeeding,
+    NULL =c(NULL,'Not/applicable'),
+    'Exclusively' = 'Yes, I only breastfed, no formula',
+    'Partially' = 'Yes, I partially breastfed and partially used formula', 
+    'Formula Only' = 'No, I only used formula')
+summary(cleansurveys$Breastfeeding)
+
+```
+
+### Sexual Dysfunction
+
+#### Question 26
+"After your last delivery, did you experience lack of physical arousal
+(i.e. getting excited with intimacy)?"
+
+```{r rename sexual dysfunction, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("SexualDysfunction"="Afteryourdeliverydidyouexp")
+cleansurveys$SexualDysfunction <- as.factor(cleansurveys$SexualDysfunction)
+
+cleansurveys$SexualDysfunction <- factor(cleansurveys$SexualDysfunction,
+                levels = c("Yes, definitely", "Yes, a little", "No, not really", 
+                           "No, not at all", "Not sure"))
+cleansurveys$SexualDysfunction <- relevel(cleansurveys$SexualDysfunction, ref = "No, not at all") 
+summary(cleansurveys$SexualDysfunction)
+
+```
+
+### Previous Depression
+
+Had you ever been diagnosed with depression before your first pregnancy? 1 = Yes
+
+```{r previous depression, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("PrevDepression"="Hadyoueverbeendiagnosedwith")
+cleansurveys$PrevDepression <- as.factor(cleansurveys$PrevDepression)
+
+summary(cleansurveys$PrevDepression)
+
+cleansurveys$PrevDepression <- factor(cleansurveys$PrevDepression,
+                levels = c("No", "Yes"))
+
+```
+
+
+### EPDS
+
+This looks like a lot, but it's only because I had to account for
+Qualtrics' method of coding these answers. It's really just some quick
+subtraction on each question and then adding everything up.
+
+```{r rename epds, warning = FALSE}
+
+## Q1
+cleansurveys <- cleansurveys %>% rename("EPDS1"="DepressionQuestionIhavebeen")
+
+cleansurveys$EPDS1 <- as.factor(cleansurveys$EPDS1)
+cleansurveys$EPDS1 <- fct_collapse(cleansurveys$EPDS1,
+    NULL =NULL,
+    '0' = 'As much as I always could (0)',
+    '1' = 'Not quite so much now (1)', 
+    '2' = 'Definitely not so much now (2)',
+    '3' = 'Not at all (3)')
+
+cleansurveys$EPDS1 <- as.numeric(cleansurveys$EPDS1)
+cleansurveys$EPDS1 <- cleansurveys$EPDS1 - 1
+summary(cleansurveys$EPDS1)
+
+## Q2
+cleansurveys <- cleansurveys %>% rename("EPDS2"="Ihavelookedforwardwithenjoy")
+
+cleansurveys$EPDS2 <- as.factor(cleansurveys$EPDS2)
+cleansurveys$EPDS2 <- fct_collapse(cleansurveys$EPDS2,
+    NULL =NULL,
+    '0' = 'As much as I ever did (0)',
+    '1' = 'Rather less than I used to (1)', 
+    '2' = 'Definitely less than I used to (2)',
+    '3' = 'Hardly at all (3)')
+summary(cleansurveys$EPDS2)
+
+cleansurveys$EPDS2 <- as.numeric(cleansurveys$EPDS2)
+cleansurveys$EPDS2 <- cleansurveys$EPDS2 - 1
+
+## Q3
+cleansurveys <- cleansurveys %>% rename("EPDS3"="Ihaveblamedmyselfunnecessari")
+
+cleansurveys$EPDS3 <- as.factor(cleansurveys$EPDS3)
+cleansurveys$EPDS3 <- fct_collapse(cleansurveys$EPDS3,
+    NULL =NULL,
+    '0' = 'No, never (0)',
+    '1' = 'Not very often (1)', 
+    '2' = 'Yes, some of the time (2)',
+    '3' = 'Yes, most of the time (3)')
+summary(cleansurveys$EPDS3)
+
+cleansurveys$EPDS3 <- as.numeric(cleansurveys$EPDS3)
+cleansurveys$EPDS3 <- cleansurveys$EPDS3 - 1
+
+## Q4
+cleansurveys <- cleansurveys %>% rename("EPDS4"="Ihavebeenanxiousorworriedf")
+
+cleansurveys$EPDS4 <- as.factor(cleansurveys$EPDS4)
+cleansurveys$EPDS4 <- fct_collapse(cleansurveys$EPDS4,
+    NULL =NULL,
+    '0' = 'No, not at all (0)',
+    '1' = 'Hardly ever (1)', 
+    '2' = 'Yes, sometimes (2)',
+    '3' = 'Yes, very often (3)')
+summary(cleansurveys$EPDS4)
+
+cleansurveys$EPDS4 <- as.numeric(cleansurveys$EPDS4)
+cleansurveys$EPDS4 <- cleansurveys$EPDS4 - 1
+
+## Q5
+cleansurveys <- cleansurveys %>% rename("EPDS5"="Ihavefeltscaredorpanickyfo")
+
+cleansurveys$EPDS5 <- as.factor(cleansurveys$EPDS5)
+cleansurveys$EPDS5 <- fct_collapse(cleansurveys$EPDS5,
+    NULL =NULL,
+    '0' = 'No, not at all (0)',
+    '1' = 'No, not much (1)', 
+    '2' = 'Yes, sometimes (2)',
+    '3' = 'Yes, quite a lot (3)')
+summary(cleansurveys$EPDS5)
+
+cleansurveys$EPDS5 <- as.numeric(cleansurveys$EPDS5)
+cleansurveys$EPDS5 <- cleansurveys$EPDS5 - 1
+
+## Q6
+cleansurveys <- cleansurveys %>% rename("EPDS6"="Thingshavebeengettingtome")
+
+cleansurveys$EPDS6 <- as.factor(cleansurveys$EPDS6)
+cleansurveys$EPDS6 <- fct_collapse(cleansurveys$EPDS6,
+    NULL =NULL,
+    '0' = 'No, I have been coping as well as ever (0)',
+    '1' = 'No, most of the time I have coped quite well (1)', 
+    '2' = 'Yes, sometimes I havenâ€™t been coping as well as usual (2)',
+    '3' = 'Yes, most of the time I havenâ€™t been able to cope at all(3)')
+summary(cleansurveys$EPDS6)
+
+cleansurveys$EPDS6 <- as.numeric(cleansurveys$EPDS6)
+cleansurveys$EPDS6 <- cleansurveys$EPDS6 - 1
+
+
+## Q7
+cleansurveys <- cleansurveys %>% rename("EPDS7"="IhavebeensounhappythatIha")
+
+cleansurveys$EPDS7 <- as.factor(cleansurveys$EPDS7)
+cleansurveys$EPDS7 <- fct_collapse(cleansurveys$EPDS7,
+    NULL =NULL,
+    '0' = 'No, not at all (0)',
+    '1' = 'No, not very often (1)', 
+    '2' = 'Yes, sometimes (2)',
+    '3' = 'Yes, most of the time (3)')
+summary(cleansurveys$EPDS7)
+
+cleansurveys$EPDS7 <- as.numeric(cleansurveys$EPDS7)
+cleansurveys$EPDS7 <- cleansurveys$EPDS7 - 1
+
+
+## Q8
+cleansurveys <- cleansurveys %>% rename("EPDS8"="Ihavefeltsadormiserable")
+
+cleansurveys$EPDS8 <- as.factor(cleansurveys$EPDS8)
+cleansurveys$EPDS8 <- fct_collapse(cleansurveys$EPDS8,
+    NULL =NULL,
+    '0' = 'No, not at all (0)',
+    '1' = 'Not very often (1)', 
+    '2' = 'Yes, quite often (2)',
+    '3' = 'Yes, most of the time (3)')
+summary(cleansurveys$EPDS8)
+
+cleansurveys$EPDS8 <- as.numeric(cleansurveys$EPDS8)
+cleansurveys$EPDS8 <- cleansurveys$EPDS8 - 1
+
+
+## Q9
+cleansurveys <- cleansurveys %>% rename("EPDS9"="DL")
+
+cleansurveys$EPDS9 <- as.factor(cleansurveys$EPDS9)
+cleansurveys$EPDS9 <- fct_collapse(cleansurveys$EPDS9,
+    NULL =NULL,
+    '0' = 'No, never (0)',
+    '1' = 'Only occasionally (1)', 
+    '2' = 'Yes, quite often (2)',
+    '3' = 'Yes, most of the time (3)')
+summary(cleansurveys$EPDS9)
+
+cleansurveys$EPDS9 <- as.numeric(cleansurveys$EPDS9)
+cleansurveys$EPDS9 <- cleansurveys$EPDS9 - 1
+
+## Q10
+cleansurveys <- cleansurveys %>% rename("EPDS10"="Thethoughtofharmingmyselfha")
+
+cleansurveys$EPDS10 <- as.factor(cleansurveys$EPDS10)
+cleansurveys$EPDS10 <- fct_collapse(cleansurveys$EPDS10,
+    NULL =NULL,
+    '0' = 'Never (0)',
+    '1' = 'Hardly ever (1)', 
+    '2' = 'Sometimes (2)',
+    '3' = 'Yes, quite often (3)')
+summary(cleansurveys$EPDS10)
+
+cleansurveys$EPDS10 <- as.numeric(cleansurveys$EPDS10)
+cleansurveys$EPDS10 <- cleansurveys$EPDS10 - 1
+
+
+# Now sum the scores:
+
+cleansurveys$EPDStotal <- cleansurveys$EPDS1 + cleansurveys$EPDS2 + cleansurveys$EPDS3 +
+  cleansurveys$EPDS4 + cleansurveys$EPDS5 + cleansurveys$EPDS6 + cleansurveys$EPDS7 + 
+  cleansurveys$EPDS8 + cleansurveys$EPDS9 + cleansurveys$EPDS10
+summary(cleansurveys$EPDStotal)
+
+```
+
+Now we have our summed EDPS scores for everyone.
+
+We should also have a variable for whether respondents fit the criteria
+for PPD (11) according to the EPDS:
+
+```{r PPD variable, warning = FALSE}
+
+cleansurveys$PPD <- cut(cleansurveys$EPDStotal, breaks = c(0, 11, 100),
+    labels =c("No PPD","PPD"))
+cleansurveys$PPD2 <- cut(cleansurveys$EPDStotal, breaks = c(0, 13, 100),
+    labels =c("No PPD","PPD"))
+summary(cleansurveys$PPD)
+
+```
+
+The small number of non-PPD individuals is a huge problem here.
+
+### State of Residence
+
+23 = Michigan 36 = Ohio 39 = Pennsylvania
+
+```{r rename state, warning = FALSE}
+
+cleansurveys <- cleansurveys %>% rename("state"="Location")
+cleansurveys$state <- as.factor(cleansurveys$state)
+
+cleansurveys$state <- relevel(cleansurveys$state, ref = "Ohio") 
+summary(cleansurveys$state)
+
+```
+
+
+# Summaries of Our Samples
+
+Now that the data is clean, we can put together summaries of it.
+
+## Full Sample
+
+### Table 1
+
+Here's everyone
+
+```{r table 1, warning = FALSE}
+
+# R rearranged the categoricals, so I'm rearranging them so that we have the correct reference for each
+cleansurveys$MaritalStatus <- factor(cleansurveys$MaritalStatus,
+                levels = c("Married/Cohabitating", "Not in a relationship", 'Not married, but in a relationship', 'Divorced/Separated/Widowed'))
+cleansurveys$MostRecentDelivery <- factor(cleansurveys$MostRecentDelivery, levels = c('Vaginal', 'Cesarean', 'Assisted Vaginal'))
+cleansurveys$racecollapsed <- factor(cleansurveys$racecollapsed, levels = c('White', 'Black', 'Other'))
+cleansurveys$Education <- as.factor(cleansurveys$Education)
+cleansurveys$Breastfeeding <- factor(cleansurveys$Breastfeeding, levels = c('Exclusively', 'Partially', 'Formula Only'))
+
+
+
+t1.vars <- c("age", "racecollapsed", "Hispanic", "MaritalStatus", "Education", "MostRecentDelivery", "Gravidity", 
+             "NKids", "ComplicationsClean", "Breastfeeding", "SexualDysfunction", "EPDStotal", "PPD", "state")
+
+(overallt1 <- CreateTableOne(data = cleansurveys,
+                          vars = t1.vars))
+
+print.t1 <- print(overallt1, quote = FALSE,
+               noSpaces = TRUE, printToggle = FALSE)
+
+write.csv(print.t1, file = "t1.csv")
+
+
+```
+
+
+## EPDS Scores Histogram
+```{r score graph, warning = FALSE}
+
+ggplot(data=cleansurveys, aes(x =EPDStotal))+
+  geom_histogram(color = "black", fill = "salmon", bins = 27) +
+  theme(axis.text.x = element_text(angle = 90)) + theme_bw() +
+  geom_vline(aes(xintercept = 11),  size = 1)
+
+```
+A pretty good split of sample size for PPD vs no PPD - 58.3% (308 of 529) have an EPDS indicating PPD.
+
+
+## Subset - COVID-19 Women Only, with complete bleeding data
+
+Following our conversation with Dr. Kelley, I'm going to dive into a second set of analyses that filters down to our COVID-19 mothers - aka, anyone who gave birth in 2020 or 2021 - and who listed either "bleeding" or "no complications." For ease, I will refer to this as our "COVID cohort."
+
+### Table 1
+
+```{r covid mothers, warning = FALSE}
+
+cleansurveys$Year2 <- as.numeric(as.character(cleansurveys$Year))
+covidcohort <- filter(cleansurveys, Year2 >= '2020')
+
+covidcohort$PPD <- as.factor(covidcohort$PPD)
+covidcohort <- covidcohort %>% filter(!is.na(PPD))
+covidcohort <- covidcohort %>% filter(!is.na(Bleeding))
+
+t1.vars <- c("age", "racecollapsed", "Hispanic", "MaritalStatus", "Education", "MostRecentDelivery", "Gravidity","NKids",
+             "ComplicationsClean", "Bleeding", "Breastfeeding", "SexualDysfunction","PrevDepression", "EPDStotal", "PPD", "PPD2", "state")
+
+(covidoverallt1 <- CreateTableOne(data = covidcohort,
+                          vars = t1.vars))
+
+print.covidt1 <- print(covidoverallt1, quote = FALSE,
+               noSpaces = TRUE, printToggle = FALSE)
+
+write.csv(print.covidt1, file = "covidt1.csv")
+```
+
+### EPDS Scores
+```{r covid mothers score graph, warning = FALSE}
+
+ggplot(data=covidcohort, aes(x =EPDStotal))+
+  geom_histogram(color = "black", fill = "salmon", bins = 27) +
+  theme(axis.text.x = element_text(angle = 90)) + theme_bw() +
+  geom_vline(aes(xintercept = 11),  size = 1)
+
+```
+
+
+
+#### Recent Compared to Earlier Mothers
+
+A simple comparison of COVID and non-COVID mothers:
+
+```{r comparison to earlier mothers, warning = FALSE}
+
+cleansurveys$YearsSince <- as.numeric(as.character(cleansurveys$YearsSince))
+cleansurveys$covid <- cut(cleansurveys$YearsSince, breaks = c(-35, -2, 2),
+    labels =c("Pre-COVID Moms","COVID Moms"))
+(covidt1 <- CreateTableOne(data = cleansurveys,
+                          vars = t1.vars,
+                          strata = c("covid")))
+
+print.covidt1 <- print(covidt1, quote = FALSE,
+               noSpaces = TRUE, printToggle = FALSE)
+
+write.csv(print.covidt1, file = "covidt1.csv")
+
+```
+
+We find 2 significant differences between the two groups:
+
+- Their current age, which makes sense (you can expect someone whose last pregnancy was within the past 2 years to be younger than someone whose pregnancy was 2+ years ago)
+
+- Their EPDS scores, with COVID mothers scoring 1.34 points more than pre-COVID mothers. The difference in rates of PPD, however, was not found to be significant.
+
+
+#### By Bleeding
+
+I'm also going to look at the bleeding groups (bleeding vs no complications) in our COVID cohort
+
+```{r covid 1 by bleeding, warning = FALSE}
+
+
+(bleedingcovidt1 <- CreateTableOne(data = covidcohort,
+                          vars = t1.vars,
+                          strata = c("Bleeding")))
+
+print.bleedingcovidt1 <- print(bleedingcovidt1, quote = FALSE,
+               noSpaces = TRUE, printToggle = FALSE)
+
+write.csv(print.bleedingcovidt1, file = "bleedingcovidt1.csv")
+
+
+```
+Delivery method is popping up, which makes sense, as well as race and EPDS total.
+
+# Modelling the COVID cohort
+
+
+## Numeric - EPDS Score
+
+We start by modelling the numeric score:
+
+```{r numeric covid PPD g and p, warning = FALSE}
+
+numericcovidgp <- lm(EPDStotal ~ age + racecollapsed + Hispanic + MaritalStatus + Education + MostRecentDelivery + Gravidity + NKids + Bleeding + Breastfeeding + SexualDysfunction + PrevDepression + state, data = covidcohort)
+summary(numericcovidgp)
+
+(numericcovidgpci <- cbind(coef(numericcovidgp), confint(numericcovidgp)))
+write.csv(numericcovidgpci, file = "numericcovid.csv")
+```
+We find that:
+
+- Mothers who were divorced, widowed, or separated scored, on average 8.46 points (95% CI = 2.77, 14.2) points higher on the EPDS than those who were married/cohabitating
+
+- Mothers who delivered via an assisted vaginal method scored, on average, 4.54 points (95% CI = 0.824, 8.26) points higher on the EPDS than those who delivered unassisted.
+
+- Mothers who experienced bleeding requiring a transfusion scored, on average, 2.77 points (95% CI = -4.63, -0.902) points lower on the EPDS than those who did not bleed.
+
+- Mothers who had been diagnosed with depression before their first pregnancy scored, on average, 4.19 (95% CI = 2.10, 6.29) points higher than women who had never been diagnosed.
+
+
+
+## Binary 
+
+Next we are going to look at PPD as a yes/no variable (yes = EPDS score > 10):
+
+```{r binary covid ppd g and p, warning = FALSE}
+covidcohort$Hispanic <- relevel(factor(covidcohort$Hispanic), ref = "Not Hispanic or Latino")
+
+binarycovidgp <- glm(PPD ~ age + racecollapsed + Hispanic + MaritalStatus + Education + MostRecentDelivery + Gravidity + NKids + Bleeding + Breastfeeding + SexualDysfunction + PrevDepression + state, data = covidcohort, family = "binomial")
+
+summary(binarycovidgp)
+
+(binarycovidgpor <- exp(cbind(OR = coef(binarycovidgp), confint(binarycovidgp))))
+write.csv(binarycovidgpor, file = "binarycovidor.csv")
+
+binarycovidgp2 <- glm(PPD2 ~ age + racecollapsed + Hispanic + MaritalStatus + Education + MostRecentDelivery + Gravidity + NKids + Bleeding + Breastfeeding + SexualDysfunction + PrevDepression + state, data = covidcohort, family = "binomial")
+
+summary(binarycovidgp2)
+
+(binarycovidgpor2 <- exp(cbind(OR = coef(binarycovidgp2), confint(binarycovidgp2))))
+write.csv(binarycovidgpor2, file = "binarycovidor2.csv")
+write.csv(summary(binarycovidgp2)$coefficient, file = "binarycovidgp2.csv")
+```
+
+We find that many of the factors that were significant in determining EPDS score didn't prove to be significant in determining whether patients meet the threshold for PPD. The only factor that is significant here is previous depression, with individuals experiencing previous depression experiencing 3.52 times the odds of meeting the PPD threshold as those who didn't experience previous depression (95% CI = 1.64, 7.84).
+
+# Modelling the entire cohort
+
+I'm going to repeat the exact same models in the general cohort (not just the covid mothers)
+
+## Numeric - EPDS Score
+
+
+```{r numeric whole PPD, warning = FALSE}
+
+numericwholegp <- lm(EPDStotal ~ age + racecollapsed + Hispanic + MaritalStatus + Education + MostRecentDelivery + Gravidity + NKids + Bleeding + Breastfeeding + SexualDysfunction + PrevDepression + state, data = cleansurveys)
+summary(numericwholegp)
+
+(numericwholegp <- cbind(coef(numericwholegp), confint(numericwholegp)))
+
+```
+We find that:
+
+- Mothers who were divorced, widowed, or separated scored, on average 3.71 points (95% CI = 0.217, 7.21) points higher on the EPDS than those who were married/cohabitating. Those who were single scored 2.88 points (95% CI = 0.442, 5.32) points higher than those who were cohabitating.
+
+- College educated mothers had the lowest scores on EPDS, with those with high school and some college/associate degrees scoring 2.29 (95% CI = 0.221, 4.35) and 2.27 (95% OR = 0.375, 4.17) points higher, respectively.
+
+- Mothers who didn't exclusively breastfeed scored higher: partial breastfeeding mothers scored 2.01 (95% CI = 0.371, 3.65) points higher, and formula only mothers scored 2.06 (95% CI = 0.091, 4.03) points higher than breastfeeding only mothers.
+
+- Mothers who had been diagnosed with depression before their first pregnancy scored, on average, 4.22 (95% CI = 2.83, 5.61) points higher than women who had never been diagnosed.
+
+
+
+## Binary 
+
+
+```{r binary whole ppd, warning = FALSE}
+
+binarywholegp <- glm(PPD ~ age + racecollapsed + Hispanic + MaritalStatus + Education + MostRecentDelivery + Gravidity + NKids + Bleeding + Breastfeeding + SexualDysfunction + PrevDepression + state, data = cleansurveys, family = "binomial")
+
+summary(binarywholegp)
+
+(binarywholegpor <- exp(cbind(OR = coef(binarywholegp), confint(binarywholegp))))
+write.csv(binarywholegpor, file = "binarywholegpor.csv")
+```
+We find that: 
+
+- Relationship status remains significant. Single mothers experienced 3.76 times the odds of meeting the PPD threshold as those who didn't experience previous depression (95% CI = 1.39, 11.6). Divorced/Separated/Widowed mothers experienced 6.27 times the odds of meeting the PPD threshold as those who didn't experience previous depression (95% CI = 1.29, 49.7).
+
+- Mothers who completed a post-graduate degree experienced 2.71 (95% CI = 1.04, 7.22) times the odds of meeting the PPD threshold as those who had only a college degree
+
+- Mothers who didn't exclusively breastfeed experienced higher odds of meeting the threshold for PPD: moms who partially breastfed had 2.19 times the odds (95% CI = 1.20, 4.04) and moms who fed formula-only had 2.12 times the odds (95% CI = 1.03, 4.42)
+
+- Mothers who had a previous diagnosis of depression had 4.36 times (95% CI = 2.61, 7.42) times the odds of meeting the PPD threshold of those who hadn't been diagnosed in the past.
+
+
+# Notes and takeaways from these models:
+
+- We see slightly different effects between the whole cohort and the COVID mothers.
+
+- Factors significant in EPDS score are often not significant to meeting the PPD threshold. 
+
+- Our COVID Cohort models drop 50 observations each, and our whole group models drop 167. This is a sizeable portion of our observations and is likely due to NAs:
+```{r nas, warning = FALSE}
+
+sum(is.na(covidcohort$age))
+
+sum(is.na(covidcohort$racecollapsed))
+
+sum(is.na(covidcohort$Hispanic))
+
+sum(is.na(covidcohort$MaritalStatus))
+
+sum(is.na(covidcohort$Education))
+
+sum(is.na(covidcohort$MostRecentDelivery))
+
+sum(is.na(covidcohort$Gravidity))
+
+sum(is.na(covidcohort$NKids))
+
+sum(is.na(covidcohort$Bleeding))
+
+sum(is.na(covidcohort$Breastfeeding))
+
+sum(is.na(covidcohort$SexualDysfunction))
+
+sum(is.na(covidcohort$PrevDepression))
+
+sum(is.na(covidcohort$State))
+
+```
+We find that the most recent method of delivery (34 NAs) and breastfeeding (12 NAs) are likely culprits. We may want to drop them.
+
+
+# Comparing the cohorts
+
+I'm going to do a comparison - adjusting for all the other factors of demographics etc, what difference do we see between our COVID and pre COVID mothers in terms of EPDS and PPD?
+
+## Making a variable for the cohort
+
+```{r cohort variable, warning = FALSE}
+
+cleansurveys$cohort <- cut(cleansurveys$Year2, breaks = c(0, 2019, 2022),
+    labels =c("Pre-COVID","COVID"))
+summary(cleansurveys$cohort)
+
+```
+
+## Numeric - EPDS Score
+
+```{r numeric whole PPD, warning = FALSE}
+
+numericcohort <- lm(EPDStotal ~ age + racecollapsed + Hispanic + MaritalStatus + Education + MostRecentDelivery + Gravidity + NKids + Bleeding + Breastfeeding + SexualDysfunction + PrevDepression + state + cohort, data = cleansurveys)
+summary(numericcohort)
+
+(numericcohort <- cbind(coef(numericcohort), confint(numericcohort)))
+write.csv(numericcohort, file = "numericcohort.csv")
+```
+
+## Binary 
+
+
+```{r binary whole ppd, warning = FALSE}
+
+binarycohort <- glm(PPD ~ age + racecollapsed + Hispanic + MaritalStatus + Education + MostRecentDelivery + Gravidity + NKids + Bleeding + Breastfeeding + SexualDysfunction + PrevDepression + state + cohort, data = cleansurveys, family = "binomial")
+
+summary(binarycohort)
+
+(binarycohort <- exp(cbind(OR = coef(binarycohort), confint(binarycohort))))
+write.csv(binarycohort, file = "binarycohort.csv")
+```
